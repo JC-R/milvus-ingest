@@ -116,29 +116,44 @@ if __name__ == "__main__":
     # ------
     client.create_index(milvus.collection, "embedding",
         {"index_type": "IVF_FLAT", "metric_type": "L2", "params": {"nlist": 100}})
+
     query_embedding = [random.random() for _ in range(768)]
-    query_hybrid = {
-        "bool": {
-            "must": [
-                {
-                    "vector": {
-                        "embedding": {"topk": 3,
-                                      "query": [query_embedding],
-                                      "metric_type": "L2",
-                                      "params": {"nprobe": 8}}
-                    }
-                }
-            ]
-        }
-    }
+
+    class Query:
+        def __init__(self, client, collection):
+            self.client = client
+            self.collection = collection
+
+        def searh_vec(self, embedding, k, metric, nprobe):
+            query = {"bool": {"must": [{"vector": {"embedding":
+                   {"topk": k, "query": [embedding], "metric_type": metric,
+                    "params": {"nprobe": nprobe}}}}]}}
+            return self.client.search(self.collection, query, fields=["embedding"])
+
+        def search_id(self, id, k, metric, nprobe):
+            query = {"bool": {"must": [{"term": {"":
+                   {"topk": k, "query": [embedding], "metric_type": metric,
+                    "params": {"nprobe": nprobe}}}}]}}
+            return self.client.search(self.collection, query, fields=["embedding"])
 
     # ------
     # Basic hybrid search entities; check operating correctly
     # -----
     #
+    save_embedding = None
     print()
     print("testing a random knn L2 search...")
-    results = client.search(milvus.collection, query_hybrid, fields=["embedding"])
+    results = Query(milvus.client,milvus.collection).searh_vec(query_embedding, 3, "L2", 8)
+    for entities in results:
+        for topk in entities:
+            if not save_embedding:
+                save_embedding = topk.entity.get("embedding")
+                save_id = topk.entity.id
+            print("id {} - doc {} - distance {}".format(topk.entity.id, map[topk.entity.id], topk.distance))
+
+    print()
+    print("testing a specific document for knn L2 search... doc {} ".format(map[save_id]))
+    results = Query(milvus.client,milvus.collection).searh_vec(save_embedding, 3, "L2", 8)
     for entities in results:
         for topk in entities:
             print("id {} - doc {} - distance {}".format(topk.entity.id, map[topk.entity.id], topk.distance))
