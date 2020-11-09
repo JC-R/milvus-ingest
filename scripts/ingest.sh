@@ -1,18 +1,23 @@
 #!/usr/bin/env bash
 
-COLLECTION=$1
-MAPFILE=$2
+FILES=$1
+COLLECTION=$2
 INPUTDIR=$3
+OUTDIR=$4
 
 # t5-base model
 DIMS=768
-
-for f in $INPUTDIR/*.npz; do
+echo $FILES
+i=0
+for f in $INPUTDIR/$FILES*.npz; do
   f1=`echo $f | rev | cut -d "/" -f 1 | rev | sed -e "s/\.npz//g"`;
   segment=`echo $f1 | rev | cut -d "." -f 1 | rev`;
-  fname=`echo $f1 | sed -e "s/[0-9.]*$//g"`;
-  echo $f
+  if [ $i -gt 0 ]; then
+    APPEND=--append
+  fi
+  i=$((i+1))
+  python milvus-ingest.py -i $f -c $COLLECTION -d $DIMS -o $OUTDIR/$FILES $APPEND
 done
 
-python milvus-ingest.py -i $f -c $COLLECTION -d $DIMS -o $MAPFILE --test --append
+
 

@@ -1,12 +1,12 @@
 """
-This example is runnable for Milvus(0.11.x) and pymilvus(0.3.x).
+This is runnable for Milvus(0.11.x) and pymilvus(0.3.x).
 """
 
 import random
 import csv
 from pprint import pprint
 from time import process_time
-
+from os import path
 from milvus import Milvus, DataType
 import zipfile as z
 import numpy as np
@@ -43,12 +43,11 @@ if __name__ == "__main__":
     parser.add_argument("--port", type=int, default=19530)
     parser.add_argument("-c", "--collection", type=str, required=True)
     parser.add_argument("--partition", type=str)
-    parser.add_argument("-d", "--dimensions", type=int, required=True, help="Number of vector dimentions")
+    parser.add_argument("-d", "--dimensions", type=int, required=True, help="Number of vector dimensions")
     parser.add_argument("-b", "--batchsize", type=int, default=1000, help="number of vectors per ingest")
     parser.add_argument("-a", "--append", action="store_true", help="append to the collection/map file")
     parser.add_argument("-o", "--output", type=str, required=True, help="Map file, from vilmus ID to doc ID")
     parser.add_argument("--test", action="store_true", help="Run a random search after ingestion")
-
     args = parser.parse_args()
 
     collection_param = {
@@ -69,26 +68,32 @@ if __name__ == "__main__":
                       dtype=np.float32)
     client = milvus.client
 
-    # open the input zip
-    # fname = 'D:\Downloads\cw09b.dh.k100.tier.50.t5-base.embeddings.npz'
-
     embeddings = []
     ids = []
-    idx = 0
     map = {}
     batch = 0
     entities = [
         {"name": "embedding", "type": DataType.FLOAT_VECTOR, "values": embeddings},
     ]
 
-
     if args.append:
-        sys.stderr.write("\nAppending {} to collection: {}".format(args.input, args.collection))
-        fout = open(args.output, 'a')
+        sys.stderr.write("Appending {} to collection: {}\n".format(args.input, args.collection))
+        if path.exists(args.output):
+            fout = open(args.output, 'r+')
+            for line in fout:
+                i, fname = line.strip().split(",")
+                map[int(i)] = fname
+        else:
+            fout = open(args.output, 'w')
     else:
+        sys.stderr.write("Writing {} to new collection: {}\n".format(args.input, args.collection))
         fout = open(args.output, 'w')
 
-    # input is numpy filestore compressed, one doc per file
+
+    idx = len(map)
+    cnt = 0
+
+    # input is expected to be a zip file of individual numpy vectors, one per file
     t0 = process_time()
     with np.load(args.input, mmap_mode='r') as data:
         for fname, f in zip(data.files, data.zip.filelist):
@@ -98,26 +103,32 @@ if __name__ == "__main__":
             fout.write("{},{}\n".format(idx,fname))
             map[idx] = fname
             idx += 1
+            cnt += 1
             batch += 1
             if batch >= milvus.batch_size:
                 idl = milvus.ingest(entities, ids)
                 batch = 0
                 embeddings.clear()
                 ids.clear()
-                sys.stderr.write("\r{} vectors ...".format(idx))
+                sys.stderr.write("\r{} vectors ...".format(cnt))
         if batch>0:
             idl = milvus.ingest(entities, ids)
             batch = 0
-    if batch>0:
+    if batch > 0:
         milvus.ingest(entities,ids)
         batch = 0
     milvus.client.flush()
 
-    sys.stderr.write("\rIngested {} vectors in {} seconds".format(idx, process_time()-t0))
+    sys.stderr.write("\rIngested {} vectors in {} seconds".format(cnt, process_time()-t0))
     after_flush_counts = client.count_entities(milvus.collection)
-    sys.stderr.write(" > There are {} embeddings in collection `{}` after flush\n".format(after_flush_counts, milvus.collection))
+    sys.stderr.write("\n > There are {} embeddings in collection `{}` after flush\n".format(after_flush_counts, milvus.collection))
 
     if args.test:
+
+        sys.stderr.write("\nIndexing: IVF_FLAT, nlist:1024, L2 ...")
+        client.create_index(milvus.collection, "embedding",
+                            {"index_type": "IVF_FLAT", "metric_type": "L2", "params": {"nlist": 1024}})
+
         # ------
         # Basic hybrid search entities; check operating correctly
         # -----
@@ -130,8 +141,6 @@ if __name__ == "__main__":
         #     If we want to use index, the specific index params need to be provided, in our case, the "params"
         #     should be "nprobe", if no "params" given, Milvus will complain about it and raise a exception.
         # ------
-        client.create_index(milvus.collection, "embedding",
-                            {"index_type": "IVF_FLAT", "metric_type": "L2", "params": {"nlist": 100}})
 
         query_embedding = [random.random() for _ in range(768)]
 
@@ -164,7 +173,8 @@ if __name__ == "__main__":
                 if not save_embedding:
                     save_embedding = topk.entity.get("embedding")
                     save_id = topk.entity.id
-                sys.stderr.write("id {} - doc {} - distance {}\n".format(topk.entity.id, map[topk.entity.id], topk.distance))
+                idx = topk.entity.id
+                sys.stderr.write("id {} - doc {} - distance {}\n".format(idx, map[idx], topk.distance))
 
         sys.stderr.write("\n")
         sys.stderr.write("testing a specific document for knn L2 search... doc {}\n".format(map[save_id]))
